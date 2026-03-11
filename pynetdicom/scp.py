@@ -1,87 +1,54 @@
-# scp_server_full.py
 import os
 import logging
-from datetime import datetime
+import threading
+import queue
 import pydicom
 import matplotlib.pyplot as plt
 
-from pynetdicom import AE, evt
-from pynetdicom.sop_class import (
-    Verification,
-    CTImageStorage,
-    MRImageStorage,
-    SecondaryCaptureImageStorage
-)
+from pynetdicom import AE, evt, AllStoragePresentationContexts
+from pynetdicom.sop_class import Verification
 
 # -----------------------------
-# Setup logging
+# Logging
 # -----------------------------
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger('pynetdicom_scp')
+logger = logging.getLogger("pynetdicom_scp")
 
-# -----------------------------
-# Create folder to save received images
-# -----------------------------
-SAVE_FOLDER = 'received_dicom'
+SAVE_FOLDER = "received_dicom"
 os.makedirs(SAVE_FOLDER, exist_ok=True)
 
-# -----------------------------
-# Function to display DICOM
-# -----------------------------
-def show_dicom(filepath):
-    """Open and display DICOM image"""
-    try:
-        ds = pydicom.dcmread(filepath)
-
-        if "PixelData" in ds:
-            plt.imshow(ds.pixel_array, cmap="gray")
-            plt.title(f"DICOM Viewer\nPatient: {getattr(ds,'PatientName','Unknown')}")
-            plt.axis("off")
-            plt.show()
-        else:
-            print("No image data found in this DICOM file")
-
-    except Exception as e:
-        print("Error displaying DICOM:", e)
-
+# Queue to pass images to viewer
+display_queue = queue.Queue()
 
 # -----------------------------
-# Handlers
+# C-ECHO
 # -----------------------------
 def handle_echo(event):
-    """C-ECHO request handler"""
     requestor = event.assoc.requestor
-    timestamp = event.timestamp.strftime("%Y-%m-%d %H:%M:%S")
-    logger.info(f"C-ECHO from {requestor.address}:{requestor.port} at {timestamp}")
+    logger.info(f"C-ECHO from {requestor.address}:{requestor.port}")
     return 0x0000
 
 
+# -----------------------------
+# C-STORE
+# -----------------------------
 def handle_store(event):
-    """C-STORE request handler"""
+
     ds = event.dataset
     ds.file_meta = event.file_meta
 
     filename = f"{ds.SOPInstanceUID}.dcm"
     filepath = os.path.join(SAVE_FOLDER, filename)
 
-    ds.save_as(filepath, write_like_original=False)
-    logger.info(f"Received and saved DICOM file: {filepath}")
+    ds.save_as(filepath, enforce_file_format=True)
 
-    # Automatically display the image
-    show_dicom(filepath)
+    logger.info(f"DICOM saved: {filepath}")
+
+    # Send to viewer
+    display_queue.put(filepath)
 
     return 0x0000
 
-
-# -----------------------------
-# Create AE
-# -----------------------------
-ae = AE(ae_title='MY_XRAY_SCP')
-
-ae.add_supported_context(Verification)
-ae.add_supported_context(CTImageStorage)
-ae.add_supported_context(MRImageStorage)
-ae.add_supported_context(SecondaryCaptureImageStorage)
 
 handlers = [
     (evt.EVT_C_ECHO, handle_echo),
@@ -89,7 +56,51 @@ handlers = [
 ]
 
 # -----------------------------
-# Start SCP server
+# Start SCP in background thread
 # -----------------------------
-print("DICOM SCP Server running on port 11112...")
-ae.start_server(("localhost", 11112), evt_handlers=handlers, block=True)
+def start_scp():
+
+    ae = AE(ae_title="MY_XRAY_SCP")
+
+    ae.add_supported_context(Verification)
+
+    for context in AllStoragePresentationContexts:
+        ae.add_supported_context(context.abstract_syntax)
+
+    print("DICOM SCP Server running on port 11112...")
+
+    ae.start_server(("0.0.0.0", 11112), evt_handlers=handlers)
+
+
+scp_thread = threading.Thread(target=start_scp, daemon=True)
+scp_thread.start()
+
+# -----------------------------
+# Main thread viewer loop
+# -----------------------------
+plt.ion()
+
+while True:
+
+    filepath = display_queue.get()
+
+    try:
+        ds = pydicom.dcmread(filepath)
+
+        if "PixelData" in ds:
+
+            plt.figure("DICOM Viewer")
+
+            plt.imshow(ds.pixel_array, cmap="gray")
+
+            patient = getattr(ds, "PatientName", "Unknown")
+
+            plt.title(f"Patient: {patient}")
+
+            plt.axis("off")
+
+            plt.show()
+            plt.pause(0.001)
+
+    except Exception as e:
+        print("Viewer error:", e)

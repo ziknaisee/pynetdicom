@@ -1,6 +1,6 @@
-# scu_client_full.py
 import logging
 from pydicom import dcmread
+
 from pynetdicom import AE
 from pynetdicom.sop_class import (
     Verification,
@@ -9,49 +9,35 @@ from pynetdicom.sop_class import (
     SecondaryCaptureImageStorage
 )
 
-# -----------------------------
-# Setup logging
-# -----------------------------
 logging.basicConfig(level=logging.INFO)
-logger = logging.getLogger('pynetdicom_scu')
 
-# -----------------------------
-# Create AE (SCU)
-# -----------------------------
-ae = AE(ae_title='MY_XRAY_SCU')
+ae = AE(ae_title="MY_XRAY_SCU")
 
-# Add requested contexts (what SCU wants to send)
-ae.add_requested_context(Verification)                 # C-ECHO
-ae.add_requested_context(CTImageStorage)               # C-STORE CT
-ae.add_requested_context(MRImageStorage)               # C-STORE MR
-ae.add_requested_context(SecondaryCaptureImageStorage) # C-STORE SC
+ae.add_requested_context(Verification)
+ae.add_requested_context(CTImageStorage)
+ae.add_requested_context(MRImageStorage)
+ae.add_requested_context(SecondaryCaptureImageStorage)
 
-# -----------------------------
-# Associate with SCP
-# -----------------------------
-scp_address = 'localhost'
-scp_port = 11112
-assoc = ae.associate(scp_address, scp_port)
+SCP_IP = "127.0.0.1"
+SCP_PORT = 11112
+
+assoc = ae.associate(SCP_IP, SCP_PORT)
 
 if assoc.is_established:
-    logger.info("Association established with SCP")
 
-    # 1️⃣ C-ECHO (ping)
+    print("Connected to SCP")
+
     status = assoc.send_c_echo()
-    if status:
-        logger.info(f"C-ECHO Response: 0x{status.Status:04x}")
+    print("C-ECHO:", hex(status.Status))
 
-    # 2️⃣ C-STORE (send DICOM file)
-    dicom_file = 'test.dcm'  # Replace with your test DICOM file
-    ds = dcmread(dicom_file)
-    print(f"SOP Class UID of file: {ds.SOPClassUID}")  # Show SOP class for debug
+    ds = dcmread("test.dcm")
 
+    print("Sending DICOM...")
     status = assoc.send_c_store(ds)
-    if status:
-        logger.info(f"C-STORE Response: 0x{status.Status:04x}")
 
-    # Release association
+    print("C-STORE:", hex(status.Status))
+
     assoc.release()
-    logger.info("Association released")
+
 else:
-    logger.error("Failed to associate with SCP")
+    print("Association failed")
